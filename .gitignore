@@ -1,0 +1,6 @@
+venv-py/
+__pycache__/
+*.mp3
+*.flac
+*.jpg
+*.webp
