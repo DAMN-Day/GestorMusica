@@ -10,8 +10,8 @@ from io import BytesIO
 class GestorMusicaRetro:
     def __init__(self, root):
         self.root = root
-        self.root.title("Gestor de Música Retro V2.1")
-        self.root.geometry("850x620")
+        self.root.title("Gestor de Música Retro V2.6")
+        self.root.geometry("850x650")
         self.root.config(padx=20, pady=20)
         
         self.info_actual = None
@@ -35,7 +35,7 @@ class GestorMusicaRetro:
         self.btn_info.pack(pady=5, fill="x")
 
         self.var_modo_playlist = tk.BooleanVar(value=False)
-        tk.Checkbutton(self.p_izq, text="Descargar como Playlist (Carpeta única)", 
+        tk.Checkbutton(self.p_izq, text="Descargar como Playlist (Carpeta única + M3U)", 
                        variable=self.var_modo_playlist, font=('Arial', 9, 'bold'), fg="#e67e22").pack(anchor="w", pady=5)
 
         self.marco_meta = tk.LabelFrame(self.p_izq, text=" Metadatos Manuales ", padx=10, pady=10)
@@ -84,6 +84,7 @@ class GestorMusicaRetro:
                                        bg="#27ae60", fg="white", font=('Arial', 12, 'bold'), height=2)
         self.btn_descargar.pack(fill="x", pady=10)
 
+    # --- FUNCIONES ---
     def seleccionar_carpeta(self):
         c = filedialog.askdirectory()
         if c: self.var_ruta.set(c)
@@ -91,44 +92,42 @@ class GestorMusicaRetro:
     def obtener_info_thread(self):
         url = self.entrada_url.get().strip()
         if not url: return
-        self.lbl_estado.config(text="Buscando información en YouTube...")
+        self.lbl_estado.config(text="Buscando información rápidamente...")
         self.btn_info.config(state="disabled")
         threading.Thread(target=self.obtener_info, args=(url,), daemon=True).start()
 
     def obtener_info(self, url):
-        # Configuramos yt-dlp para que use Node o Deno y no lance warnings
-        opciones = {'quiet': True, 'skip_download': True, 'no_warnings': True}
+        opciones = {'quiet': True, 'skip_download': True, 'extract_flat': 'in_playlist', 'no_warnings': True}
         try:
             with yt_dlp.YoutubeDL(opciones) as ydl:
                 self.info_actual = ydl.extract_info(url, download=False)
                 
+                # Obtener thumbnail
                 thumb_url = self.info_actual.get('thumbnail')
+                if not thumb_url and 'entries' in self.info_actual:
+                    thumb_url = self.info_actual['entries'][0].get('thumbnail')
+                
                 if thumb_url:
-                    res = requests.get(thumb_url, timeout=10)
+                    res = requests.get(thumb_url, timeout=5)
                     img = Image.open(BytesIO(res.content))
                     img.thumbnail((280, 280))
                     self.portada_tk = ImageTk.PhotoImage(img)
                 
                 self.root.after(0, self.actualizar_preview)
         except Exception as e:
-            err_str = str(e) # SOLUCIÓN AL NameError
-            self.root.after(0, lambda: self.lbl_estado.config(text="Error al obtener info."))
-            self.root.after(0, lambda: messagebox.showerror("Error", f"No se pudo obtener info: {err_str}"))
+            err_str = str(e)
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Info fallida: {err_str}"))
         finally:
             self.root.after(0, lambda: self.btn_info.config(state="normal"))
 
     def actualizar_preview(self):
         if self.portada_tk:
             self.lbl_img.config(image=self.portada_tk, text="")
-        
         titulo = self.info_actual.get('title', 'N/A')
         canal = self.info_actual.get('uploader', 'N/A')
-        vistas = self.info_actual.get('view_count', 0)
-        tipo = "Playlist/Álbum" if 'entries' in self.info_actual else "Video/Track"
-        
-        info_texto = f"Tipo: {tipo}\n\nTITULO:\n{titulo}\n\nCANAL:\n{canal}\n\nVISTAS: {vistas:,}"
-        self.lbl_preview_info.config(text=info_texto)
-        self.lbl_estado.config(text="Información cargada correctamente.")
+        tipo = "Playlist/Álbum" if 'entries' in self.info_actual else "Track"
+        self.lbl_preview_info.config(text=f" {tipo}\n\nTITULO:\n{titulo}\n\nCANAL:\n{canal}")
+        self.lbl_estado.config(text="Info cargada.")
 
     def progreso_hook(self, d):
         if d['status'] == 'downloading':
@@ -136,30 +135,43 @@ class GestorMusicaRetro:
             if total:
                 p = (d['downloaded_bytes'] / total) * 100
                 self.root.after(0, lambda: self.progreso.config(value=p))
-                self.root.after(0, lambda: self.lbl_estado.config(text=f"Descargando... {p:.1f}%"))
 
     def descargar_thread(self):
         if not self.entrada_url.get(): return
         self.btn_descargar.config(state="disabled")
         threading.Thread(target=self.descargar, daemon=True).start()
 
+    def crear_archivo_m3u(self, ruta_carpeta, nombre_carpeta):
+        full_path = os.path.join(ruta_carpeta, nombre_carpeta)
+        if not os.path.exists(full_path): return
+        
+        archivos = [f for f in os.listdir(full_path) if f.endswith(('.mp3', '.flac'))]
+        archivos.sort() # Mantener el orden numérico que pusimos
+        
+        with open(os.path.join(full_path, f"{nombre_carpeta}.m3u"), "w", encoding="utf-8") as m3u:
+            m3u.write("#EXTM3U\n")
+            for f in archivos:
+                m3u.write(f"{f}\n")
+
     def descargar(self):
+        # DECLARACIÓN DE VARIABLES DESDE LA UI
         url = self.entrada_url.get().strip()
         ruta_base = self.var_ruta.get()
         fmt = self.var_fmt.get()
         cal = self.cb_calidad.get().replace("kbps", "")
-        
         user_art = self.ent_artista.get().strip()
         user_alb = self.ent_album.get().strip()
         es_playlist = self.var_modo_playlist.get()
 
+        # Configuración de Plantilla y Carpetas
         if es_playlist:
+            # %(playlist_autonumber)s o %(playlist_index)s aseguran el orden 01, 02...
             folder_name = user_alb if user_alb else "%(playlist_title,uploader)s"
-            plantilla = os.path.join(ruta_base, folder_name, "%(title)s.%(ext)s")
+            plantilla = os.path.join(ruta_base, folder_name, "%(playlist_index)02d - %(title)s.%(ext)s")
         else:
             art = user_art if user_art else "%(artist,uploader,Unknown Artist)s"
             alb = user_alb if user_alb else "%(album,Unknown Album)s"
-            plantilla = os.path.join(ruta_base, art, alb, "%(title)s.%(ext)s")
+            plantilla = os.path.join(ruta_base, art, alb, "%(playlist_index)02d - %(title)s.%(ext)s")
 
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -176,23 +188,31 @@ class GestorMusicaRetro:
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extraer info para aplicar metadatos manuales si existen
                 info = ydl.extract_info(url, download=False)
                 if 'entries' in info:
                     for i, entry in enumerate(info['entries']):
-                        if not entry: continue
-                        if user_art: entry['artist'] = user_art
-                        if user_alb: entry['album'] = user_alb
-                        entry['track_number'] = i + 1
-                        ydl.process_info(entry)
+                        if entry:
+                            if user_art: entry['artist'] = user_art
+                            if user_alb: entry['album'] = user_alb
+                            entry['track_number'] = i + 1
+                            ydl.process_info(entry)
                 else:
                     if user_art: info['artist'] = user_art
                     if user_alb: info['album'] = user_alb
                     ydl.process_info(info)
+                
+                # Crear el archivo de playlist si es necesario
+                if es_playlist:
+                    # Obtenemos el nombre final de la carpeta procesada
+                    nombre_final_folder = ydl.prepare_filename(info if 'entries' not in info else info['entries'][0])
+                    folder_path = os.path.basename(os.path.dirname(nombre_final_folder))
+                    self.crear_archivo_m3u(ruta_base, folder_path)
 
-            self.root.after(0, lambda: messagebox.showinfo("Éxito", "Proceso terminado con éxito."))
+            self.root.after(0, lambda: messagebox.showinfo("Éxito", "¡Todo listo y ordenado!"))
         except Exception as e:
-            err_msg = str(e) # SOLUCIÓN AL NameError
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Error en descarga: {err_msg}"))
+            err_msg = str(e)
+            self.root.after(0, lambda: messagebox.showerror("Error", err_msg))
         finally:
             self.root.after(0, lambda: self.btn_descargar.config(state="normal"))
             self.root.after(0, lambda: self.lbl_estado.config(text="Listo"))
