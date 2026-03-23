@@ -27,7 +27,23 @@ Para que el programa pueda convertir el audio y pegar las portadas, **DEBES** te
 
 Sigue estos pasos para ejecutarlo en cualquier ordenador (Windows, Linux o Mac):
 
-### 1. Clonar el repositorio
-```bash
-git clone [https://github.com/TU_USUARIO/reproductor-retro-gestor.git](https://github.com/TU_USUARIO/reproductor-retro-gestor.git)
-cd reproductor-retro-gestor
+## 🛠️ Requisitos Externos
+Es necesario tener **FFmpeg** y **Node.js** instalados en el sistema:
+* **Arch Linux:** `sudo pacman -S ffmpeg nodejs deno`
+* **Ubuntu/Debian:** `sudo apt install ffmpeg nodejs`
+* **Windows:** Descargar FFmpeg y Node.js y añadirlos al PATH.
+
+## 🚀 Instalación Rápida
+### Linux (Terminal)
+1. `git clone https://github.com/TU_USUARIO/tu-repo.git`
+2. `cd tu-repo`
+3. `python -m venv venv-py && source venv-py/bin/activate`
+4. `pip install yt-dlp`
+5. `python reproductor-descargador.py`
+
+### Windows (PowerShell)
+1. `git clone ...`
+2. `python -m venv venv-py`
+3. `.\venv-py\Scripts\activate`
+4. `pip install yt-dlp`
+5. `python .\reproductor-descargador.py`
