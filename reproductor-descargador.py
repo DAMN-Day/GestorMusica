@@ -3,154 +3,201 @@ from tkinter import ttk, messagebox, filedialog
 import yt_dlp
 import threading
 import os
+import requests
+from PIL import Image, ImageTk
+from io import BytesIO
 
-def actualizar_gui_progreso(porcentaje, texto):
-    barra_progreso['value'] = porcentaje
-    etiqueta_estado.config(text=texto)
+class GestorMusicaRetro:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Gestor de Música Retro V2.1")
+        self.root.geometry("850x620")
+        self.root.config(padx=20, pady=20)
+        
+        self.info_actual = None
+        self.portada_tk = None
 
-def progreso_hook(d):
-    if d['status'] == 'downloading':
-        total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate')
-        if total_bytes:
-            descargado = d.get('downloaded_bytes', 0)
-            porcentaje = (descargado / total_bytes) * 100
-            ventana.after(0, actualizar_gui_progreso, porcentaje, f"Descargando... {porcentaje:.1f}%")
-    elif d['status'] == 'finished':
-        ventana.after(0, actualizar_gui_progreso, 100, "Finalizando archivo...")
+        self.setup_ui()
 
-def manejar_cambio_formato():
-    if variable_formato.get() == "flac":
-        selector_calidad.config(state="disabled")
-    else:
-        selector_calidad.config(state="readonly")
+    def setup_ui(self):
+        self.paneles = tk.Frame(self.root)
+        self.paneles.pack(fill="both", expand=True)
 
-def seleccionar_carpeta():
-    carpeta = filedialog.askdirectory()
-    if carpeta:
-        variable_ruta.set(carpeta)
+        # PANEL IZQUIERDO
+        self.p_izq = tk.Frame(self.paneles, width=450)
+        self.p_izq.pack(side="left", fill="both", expand=True, padx=(0, 20))
 
-def descargar_musica():
-    url = entrada_url.get()
-    formato = variable_formato.get()
-    calidad = combo_calidad.get().replace("kbps", "")
-    ruta_base = variable_ruta.get()
-    
-    user_artist = entrada_artista.get().strip()
-    user_album = entrada_album.get().strip()
-    
-    if not url or not ruta_base:
-        messagebox.showwarning("Atención", "Falta el enlace o la carpeta de destino.")
-        return
+        tk.Label(self.p_izq, text="Enlace de YouTube:", font=('Arial', 10, 'bold')).pack(anchor="w")
+        self.entrada_url = tk.Entry(self.p_izq, width=50)
+        self.entrada_url.pack(pady=5, fill="x")
 
-    boton_descargar.config(state="disabled", text="Trabajando...")
-    barra_progreso['value'] = 0
+        self.btn_info = tk.Button(self.p_izq, text="🔍 Obtener Información", command=self.obtener_info_thread, bg="#3498db", fg="white")
+        self.btn_info.pack(pady=5, fill="x")
 
-    # Lógica de carpetas mejorada
-    folder_art = user_artist if user_artist else "%(artist,uploader,Unknown Artist)s"
-    folder_alb = user_album if user_album else "%(album,Unknown Album)s"
-    plantilla_ruta = os.path.join(ruta_base, folder_art, folder_alb, "%(title)s.%(ext)s")
+        self.var_modo_playlist = tk.BooleanVar(value=False)
+        tk.Checkbutton(self.p_izq, text="Descargar como Playlist (Carpeta única)", 
+                       variable=self.var_modo_playlist, font=('Arial', 9, 'bold'), fg="#e67e22").pack(anchor="w", pady=5)
 
-    opciones_ydl = {
-        'format': 'bestaudio/best',
-        'outtmpl': plantilla_ruta,
-        'writethumbnail': True,
-        'progress_hooks': [progreso_hook],
-        '#js-runtimes': 'node', # Intentar forzar node si está instalado
-        'postprocessors': [
-            {
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': formato,
-                'preferredquality': calidad if formato == 'mp3' else '0', 
-            },
-            { 'key': 'FFmpegMetadata', 'add_metadata': True },
-            { 'key': 'EmbedThumbnail' }
-        ],
-        # Esta opción ayuda a que no ignore videos que ya cree que bajó
-        'ignoreerrors': True, 
-    }
+        self.marco_meta = tk.LabelFrame(self.p_izq, text=" Metadatos Manuales ", padx=10, pady=10)
+        self.marco_meta.pack(fill="x", pady=10)
+        
+        tk.Label(self.marco_meta, text="Artista:").grid(row=0, column=0, sticky="w")
+        self.ent_artista = tk.Entry(self.marco_meta, width=35); self.ent_artista.grid(row=0, column=1, pady=2)
+        
+        tk.Label(self.marco_meta, text="Álbum:").grid(row=1, column=0, sticky="w")
+        self.ent_album = tk.Entry(self.marco_meta, width=35); self.ent_album.grid(row=1, column=1, pady=2)
 
-    def hilo_descarga():
+        tk.Label(self.p_izq, text="Guardar en:", font=('Arial', 10, 'bold')).pack(anchor="w")
+        self.f_ruta = tk.Frame(self.p_izq)
+        self.f_ruta.pack(fill="x", pady=5)
+        self.var_ruta = tk.StringVar(value=os.getcwd())
+        tk.Entry(self.f_ruta, textvariable=self.var_ruta, width=35).pack(side="left", fill="x", expand=True)
+        tk.Button(self.f_ruta, text="...", command=self.seleccionar_carpeta).pack(side="left", padx=2)
+
+        self.marco_fmt = tk.LabelFrame(self.p_izq, text=" Formato y Calidad ", padx=10, pady=10)
+        self.marco_fmt.pack(fill="x", pady=10)
+        self.var_fmt = tk.StringVar(value="mp3")
+        tk.Radiobutton(self.marco_fmt, text="MP3", variable=self.var_fmt, value="mp3").pack(side="left")
+        tk.Radiobutton(self.marco_fmt, text="FLAC", variable=self.var_fmt, value="flac").pack(side="left", padx=20)
+        self.cb_calidad = ttk.Combobox(self.marco_fmt, values=["128kbps", "192kbps", "256kbps", "320kbps"], width=10, state="readonly")
+        self.cb_calidad.set("320kbps")
+        self.cb_calidad.pack(side="left")
+
+        # PANEL DERECHO (PREVIEW)
+        self.p_der = tk.LabelFrame(self.paneles, text=" Vista Previa ", padx=10, pady=10, width=320)
+        self.p_der.pack(side="right", fill="both")
+        self.p_der.pack_propagate(False)
+
+        self.lbl_img = tk.Label(self.p_der, text="Sin miniatura", bg="gray90", width=30, height=10)
+        self.lbl_img.pack(pady=10)
+
+        self.lbl_preview_info = tk.Label(self.p_der, text="Esperando enlace...", wraplength=280, justify="left", font=('Arial', 9))
+        self.lbl_preview_info.pack(fill="x")
+
+        # SECCIÓN INFERIOR
+        self.lbl_estado = tk.Label(self.root, text="Listo", fg="#7f8c8d")
+        self.lbl_estado.pack(pady=(10,0))
+        self.progreso = ttk.Progressbar(self.root, orient="horizontal", length=800, mode="determinate")
+        self.progreso.pack(pady=5)
+
+        self.btn_descargar = tk.Button(self.root, text="INICIAR DESCARGA", command=self.descargar_thread, 
+                                       bg="#27ae60", fg="white", font=('Arial', 12, 'bold'), height=2)
+        self.btn_descargar.pack(fill="x", pady=10)
+
+    def seleccionar_carpeta(self):
+        c = filedialog.askdirectory()
+        if c: self.var_ruta.set(c)
+
+    def obtener_info_thread(self):
+        url = self.entrada_url.get().strip()
+        if not url: return
+        self.lbl_estado.config(text="Buscando información en YouTube...")
+        self.btn_info.config(state="disabled")
+        threading.Thread(target=self.obtener_info, args=(url,), daemon=True).start()
+
+    def obtener_info(self, url):
+        # Configuramos yt-dlp para que use Node o Deno y no lance warnings
+        opciones = {'quiet': True, 'skip_download': True, 'no_warnings': True}
         try:
-            with yt_dlp.YoutubeDL(opciones_ydl) as ydl:
-                # 1. Extraer información (sin descargar aún)
-                info_dict = ydl.extract_info(url, download=False)
+            with yt_dlp.YoutubeDL(opciones) as ydl:
+                self.info_actual = ydl.extract_info(url, download=False)
                 
-                # 2. Verificar si es una playlist (álbum) o un solo video
-                if 'entries' in info_dict:
-                    # Es una playlist/álbum
-                    total_videos = len(info_dict['entries'])
-                    ventana.after(0, lambda: etiqueta_estado.config(text=f"Detectado álbum con {total_videos} canciones..."))
-                    
-                    for i, entry in enumerate(info_dict['entries']):
-                        if entry is None: continue # Saltar si hay videos privados/borrados
-                        
-                        # Inyectar metadatos manuales en cada canción del álbum
-                        if user_artist: entry['artist'] = user_artist
-                        if user_album: entry['album'] = user_album
-                        
-                        ventana.after(0, lambda n=i+1: etiqueta_estado.config(text=f"Procesando canción {n} de {total_videos}..."))
+                thumb_url = self.info_actual.get('thumbnail')
+                if thumb_url:
+                    res = requests.get(thumb_url, timeout=10)
+                    img = Image.open(BytesIO(res.content))
+                    img.thumbnail((280, 280))
+                    self.portada_tk = ImageTk.PhotoImage(img)
+                
+                self.root.after(0, self.actualizar_preview)
+        except Exception as e:
+            err_str = str(e) # SOLUCIÓN AL NameError
+            self.root.after(0, lambda: self.lbl_estado.config(text="Error al obtener info."))
+            self.root.after(0, lambda: messagebox.showerror("Error", f"No se pudo obtener info: {err_str}"))
+        finally:
+            self.root.after(0, lambda: self.btn_info.config(state="normal"))
+
+    def actualizar_preview(self):
+        if self.portada_tk:
+            self.lbl_img.config(image=self.portada_tk, text="")
+        
+        titulo = self.info_actual.get('title', 'N/A')
+        canal = self.info_actual.get('uploader', 'N/A')
+        vistas = self.info_actual.get('view_count', 0)
+        tipo = "Playlist/Álbum" if 'entries' in self.info_actual else "Video/Track"
+        
+        info_texto = f"Tipo: {tipo}\n\nTITULO:\n{titulo}\n\nCANAL:\n{canal}\n\nVISTAS: {vistas:,}"
+        self.lbl_preview_info.config(text=info_texto)
+        self.lbl_estado.config(text="Información cargada correctamente.")
+
+    def progreso_hook(self, d):
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate')
+            if total:
+                p = (d['downloaded_bytes'] / total) * 100
+                self.root.after(0, lambda: self.progreso.config(value=p))
+                self.root.after(0, lambda: self.lbl_estado.config(text=f"Descargando... {p:.1f}%"))
+
+    def descargar_thread(self):
+        if not self.entrada_url.get(): return
+        self.btn_descargar.config(state="disabled")
+        threading.Thread(target=self.descargar, daemon=True).start()
+
+    def descargar(self):
+        url = self.entrada_url.get().strip()
+        ruta_base = self.var_ruta.get()
+        fmt = self.var_fmt.get()
+        cal = self.cb_calidad.get().replace("kbps", "")
+        
+        user_art = self.ent_artista.get().strip()
+        user_alb = self.ent_album.get().strip()
+        es_playlist = self.var_modo_playlist.get()
+
+        if es_playlist:
+            folder_name = user_alb if user_alb else "%(playlist_title,uploader)s"
+            plantilla = os.path.join(ruta_base, folder_name, "%(title)s.%(ext)s")
+        else:
+            art = user_art if user_art else "%(artist,uploader,Unknown Artist)s"
+            alb = user_alb if user_alb else "%(album,Unknown Album)s"
+            plantilla = os.path.join(ruta_base, art, alb, "%(title)s.%(ext)s")
+
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': plantilla,
+            'writethumbnail': True,
+            'no_warnings': True,
+            'progress_hooks': [self.progreso_hook],
+            'postprocessors': [
+                {'key': 'FFmpegExtractAudio', 'preferredcodec': fmt, 'preferredquality': cal},
+                {'key': 'FFmpegMetadata', 'add_metadata': True},
+                {'key': 'EmbedThumbnail'}
+            ],
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if 'entries' in info:
+                    for i, entry in enumerate(info['entries']):
+                        if not entry: continue
+                        if user_art: entry['artist'] = user_art
+                        if user_alb: entry['album'] = user_alb
+                        entry['track_number'] = i + 1
                         ydl.process_info(entry)
                 else:
-                    # Es un solo video
-                    if user_artist: info_dict['artist'] = user_artist
-                    if user_album: info_dict['album'] = user_album
-                    ydl.process_info(info_dict)
-                
-            ventana.after(0, lambda: messagebox.showinfo("Éxito", "¡Álbum completo descargado y organizado!"))
-        except Exception as err:
-            error_msg = str(err)
-            ventana.after(0, lambda: messagebox.showerror("Error", f"Error en el álbum: {error_msg}"))
+                    if user_art: info['artist'] = user_art
+                    if user_alb: info['album'] = user_alb
+                    ydl.process_info(info)
+
+            self.root.after(0, lambda: messagebox.showinfo("Éxito", "Proceso terminado con éxito."))
+        except Exception as e:
+            err_msg = str(e) # SOLUCIÓN AL NameError
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Error en descarga: {err_msg}"))
         finally:
-            ventana.after(0, lambda: boton_descargar.config(state="normal", text="INICIAR DESCARGA"))
+            self.root.after(0, lambda: self.btn_descargar.config(state="normal"))
+            self.root.after(0, lambda: self.lbl_estado.config(text="Listo"))
 
-    threading.Thread(target=hilo_descarga, daemon=True).start()
-
-# --- Interfaz Gráfica ---
-ventana = tk.Tk()
-ventana.title("Gestor de Música Retro")
-ventana.geometry("520x560")
-ventana.config(padx=20, pady=20)
-
-tk.Label(ventana, text="Enlace de YouTube:", font=('Arial', 10, 'bold')).pack(anchor="w")
-entrada_url = tk.Entry(ventana, width=65)
-entrada_url.pack(pady=5)
-
-marco_meta = tk.LabelFrame(ventana, text=" Metadatos del Álbum (Opcional) ", padx=10, pady=10)
-marco_meta.pack(fill="x", pady=10)
-
-tk.Label(marco_meta, text="Artista:").grid(row=0, column=0, sticky="w")
-entrada_artista = tk.Entry(marco_meta, width=45)
-entrada_artista.grid(row=0, column=1, pady=5)
-
-tk.Label(marco_meta, text="Álbum:").grid(row=1, column=0, sticky="w")
-entrada_album = tk.Entry(marco_meta, width=45)
-entrada_album.grid(row=1, column=1, pady=5)
-
-tk.Label(ventana, text="Guardar en:", font=('Arial', 10, 'bold')).pack(anchor="w", pady=(10,0))
-marco_ruta = tk.Frame(ventana)
-marco_ruta.pack(fill="x", pady=5)
-variable_ruta = tk.StringVar(value=os.getcwd())
-tk.Entry(marco_ruta, textvariable=variable_ruta, width=50).pack(side="left", padx=(0,5))
-tk.Button(marco_ruta, text="Carpeta", command=seleccionar_carpeta).pack(side="left")
-
-marco_opciones = tk.LabelFrame(ventana, text=" Calidad y Formato ", padx=10, pady=10)
-marco_opciones.pack(fill="x", pady=10)
-
-variable_formato = tk.StringVar(value="mp3")
-tk.Radiobutton(marco_opciones, text="MP3", variable=variable_formato, value="mp3", command=manejar_cambio_formato).grid(row=0, column=0)
-tk.Radiobutton(marco_opciones, text="FLAC", variable=variable_formato, value="flac", command=manejar_cambio_formato).grid(row=0, column=1, padx=20)
-
-combo_calidad = tk.StringVar(value="320kbps")
-selector_calidad = ttk.Combobox(marco_opciones, textvariable=combo_calidad, width=10, state="readonly")
-selector_calidad['values'] = ("128kbps", "192kbps", "256kbps", "320kbps")
-selector_calidad.grid(row=0, column=2)
-
-etiqueta_estado = tk.Label(ventana, text="Listo para iniciar", fg="#555")
-etiqueta_estado.pack(pady=(10,0))
-barra_progreso = ttk.Progressbar(ventana, orient="horizontal", length=450, mode="determinate")
-barra_progreso.pack(pady=5)
-
-boton_descargar = tk.Button(ventana, text="INICIAR DESCARGA", command=descargar_musica, bg="#2196F3", fg="white", font=('Arial', 11, 'bold'), height=2)
-boton_descargar.pack(pady=20, fill="x")
-
-ventana.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = GestorMusicaRetro(root)
+    root.mainloop()
