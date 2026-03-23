@@ -35,7 +35,7 @@ Es necesario tener **FFmpeg** y **Node.js** instalados en el sistema:
 
 ## 🚀 Instalación Rápida
 ### Linux (Terminal)
-1. `git clone https://github.com/TU_USUARIO/tu-repo.git`
+1. `git clone https://github.com/DAMN-Day/https://github.com/DAMN-Day/GestorMusica.git`
 2. `cd tu-repo`
 3. `python -m venv venv-py && source venv-py/bin/activate`
 4. `pip install yt-dlp`
