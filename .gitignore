@@ -4,3 +4,4 @@ __pycache__/
 *.flac
 *.jpg
 *.webp
+/build/GestorDescargas
